@@ -9,24 +9,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Hent koden
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Sett opp JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Sett opp Android SDK
-        uses: android-actions/setup-android@v3
+      # GitHubs Ubuntu-maskiner har Android SDK forhåndsinstallert (ANDROID_HOME).
+      - name: Vis Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" || true
 
       - name: Sett opp Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
       - name: Bygg debug-APK
-        run: gradle assembleDebug --no-daemon
+        run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Last opp APK som artefakt
         uses: actions/upload-artifact@v4
