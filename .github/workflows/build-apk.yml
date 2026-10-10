@@ -7,6 +7,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Hent koden
         uses: actions/checkout@v5
@@ -37,3 +39,15 @@ jobs:
           name: app-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      # Legger APK-en ut under «Releases» så den kan lastes ned direkte på telefonen.
+      - name: Publiser APK under Releases
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk samtaletranskribering.apk
+          gh release create "bygg-${{ github.run_number }}" samtaletranskribering.apk \
+            --title "Samtaletranskribering – bygg ${{ github.run_number }}" \
+            --notes "Automatisk bygget fra ${{ github.sha }}. Last ned samtaletranskribering.apk og installer på telefonen." \
+            --latest

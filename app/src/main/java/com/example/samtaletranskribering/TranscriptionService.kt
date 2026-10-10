@@ -37,6 +37,7 @@ class TranscriptionService : Service() {
         const val ACTION_STATUS = "com.example.samtaletranskribering.STATUS"
         const val EXTRA_TEXT = "text"
         const val EXTRA_LANGUAGE = "language"
+        const val EXTRA_LEVEL = "level"
         private const val CHANNEL_ID = "transcription"
         private const val NOTIF_ID = 42
     }
@@ -48,12 +49,32 @@ class TranscriptionService : Service() {
     private var audioManager: AudioManager? = null
     private val handler = Handler(Looper.getMainLooper())
 
+    // Lydnivå for replikken som pågår – brukes til å skille talere.
+    private val allSamples = ArrayList<Float>()
+    private val speechSamples = ArrayList<Float>()
+    private var inSpeech = false
+
+    /** Snittet av den sterkeste halvdelen av målingene = hvor kraftig stemmen var. */
+    private fun utteranceLevel(): Float {
+        val src = if (speechSamples.isNotEmpty()) speechSamples else allSamples
+        if (src.isEmpty()) return 0f
+        val sorted = src.sortedDescending()
+        val top = sorted.take(maxOf(1, sorted.size / 2))
+        return top.average().toFloat()
+    }
+
     private val listener = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) { broadcast(ACTION_STATUS, "Lytter …") }
-        override fun onBeginningOfSpeech() {}
-        override fun onRmsChanged(rmsdB: Float) {}
+        override fun onReadyForSpeech(params: Bundle?) {
+            allSamples.clear(); speechSamples.clear(); inSpeech = false
+            broadcast(ACTION_STATUS, "Lytter …")
+        }
+        override fun onBeginningOfSpeech() { inSpeech = true }
+        override fun onRmsChanged(rmsdB: Float) {
+            allSamples.add(rmsdB)
+            if (inSpeech) speechSamples.add(rmsdB)
+        }
         override fun onBufferReceived(buffer: ByteArray?) {}
-        override fun onEndOfSpeech() {}
+        override fun onEndOfSpeech() { inSpeech = false }
 
         override fun onError(error: Int) {
             listening = false
@@ -71,7 +92,7 @@ class TranscriptionService : Service() {
             val text = results
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull().orEmpty()
-            if (text.isNotBlank()) broadcast(ACTION_FINAL, text)
+            if (text.isNotBlank()) broadcast(ACTION_FINAL, text, utteranceLevel())
             listening = false
             if (!stopped) scheduleRestart(60L)
         }
@@ -198,11 +219,12 @@ class TranscriptionService : Service() {
         }
     }
 
-    private fun broadcast(action: String, text: String) {
+    private fun broadcast(action: String, text: String, level: Float? = null) {
         sendBroadcast(
             Intent(action).apply {
                 setPackage(packageName)
                 putExtra(EXTRA_TEXT, text)
+                if (level != null) putExtra(EXTRA_LEVEL, level)
             }
         )
     }

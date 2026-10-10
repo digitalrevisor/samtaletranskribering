@@ -6,17 +6,27 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
+import android.text.style.StyleSpan
 import android.view.View
+import android.view.ViewGroup
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
-import android.widget.ScrollView
+import android.widget.EditText
+import android.widget.ListView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import java.io.File
@@ -27,8 +37,8 @@ import java.util.Locale
 class MainActivity : AppCompatActivity() {
 
     private lateinit var statusView: TextView
-    private lateinit var transcriptView: TextView
-    private lateinit var scroll: ScrollView
+    private lateinit var partialView: TextView
+    private lateinit var listView: ListView
     private lateinit var startButton: Button
     private lateinit var saveButton: Button
     private lateinit var languageSpinner: Spinner
@@ -62,8 +72,15 @@ class MainActivity : AppCompatActivity() {
     private var selectedLanguage = "nb-NO"
     private val prefs by lazy { getSharedPreferences("prefs", MODE_PRIVATE) }
 
-    private val lines = StringBuilder()
-    private var partial = ""
+    // Talere: 0 = Meg, 1 = Anroper (navn kan endres ved å holde inne en linje)
+    private val names = arrayOf("Meg", "Anroper")
+    private val speakerColors = intArrayOf(
+        Color.parseColor("#2F80ED"),
+        Color.parseColor("#E8772E")
+    )
+
+    private val entries = mutableListOf<Entry>()
+    private lateinit var adapter: TranscriptAdapter
     private var running = false
 
     private val permissionLauncher =
@@ -79,17 +96,49 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val text = intent?.getStringExtra(TranscriptionService.EXTRA_TEXT).orEmpty()
             when (intent?.action) {
-                TranscriptionService.ACTION_PARTIAL -> { partial = text; render() }
+                TranscriptionService.ACTION_PARTIAL -> showPartial(text)
                 TranscriptionService.ACTION_FINAL -> {
                     if (text.isNotBlank()) {
                         val ts = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-                        lines.append("[").append(ts).append("] ").append(text.trim()).append("\n")
+                        val level = intent.getFloatExtra(TranscriptionService.EXTRA_LEVEL, 0f)
+                        entries.add(Entry(ts, text.trim(), level))
+                        SpeakerClassifier.relabel(entries)
+                        adapter.notifyDataSetChanged()
+                        listView.setSelection(entries.size - 1)
                     }
-                    partial = ""
-                    render()
+                    showPartial("")
                 }
                 TranscriptionService.ACTION_STATUS -> statusView.text = text
             }
+        }
+    }
+
+    /** Viser hver replikk med farget talernavn, tid og tekst. */
+    private inner class TranscriptAdapter :
+        ArrayAdapter<Entry>(this@MainActivity, 0, entries) {
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val tv = (convertView as? TextView) ?: TextView(context).apply {
+                val pad = (8 * resources.displayMetrics.density).toInt()
+                setPadding(pad, pad, pad, pad)
+                textSize = 16f
+            }
+            val e = entries[position]
+            val sb = SpannableStringBuilder()
+            val name = names[e.speaker]
+            sb.append(name)
+            sb.setSpan(StyleSpan(Typeface.BOLD), 0, name.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            sb.setSpan(
+                ForegroundColorSpan(speakerColors[e.speaker]), 0, name.length,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+            val metaStart = sb.length
+            sb.append("  ").append(e.time)
+            if (e.manual) sb.append("  ✓")
+            sb.setSpan(RelativeSizeSpan(0.8f), metaStart, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            sb.setSpan(ForegroundColorSpan(Color.GRAY), metaStart, sb.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            sb.append("\n").append(e.text)
+            tv.text = sb
+            return tv
         }
     }
 
@@ -98,17 +147,36 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         statusView = findViewById(R.id.status)
-        transcriptView = findViewById(R.id.transcript)
-        scroll = findViewById(R.id.scroll)
+        partialView = findViewById(R.id.partial)
+        listView = findViewById(R.id.transcriptList)
         startButton = findViewById(R.id.startButton)
         saveButton = findViewById(R.id.saveButton)
         languageSpinner = findViewById(R.id.languageSpinner)
 
-        val adapter = ArrayAdapter(
+        names[0] = prefs.getString("name0", names[0]) ?: names[0]
+        names[1] = prefs.getString("name1", names[1]) ?: names[1]
+
+        adapter = TranscriptAdapter()
+        listView.adapter = adapter
+        // Trykk: bytt taler på linjen (appen lærer av rettelsen)
+        listView.setOnItemClickListener { _, _, pos, _ ->
+            val e = entries[pos]
+            e.speaker = 1 - e.speaker
+            e.manual = true
+            SpeakerClassifier.relabel(entries)
+            adapter.notifyDataSetChanged()
+        }
+        // Hold inne: gi taleren et navn
+        listView.setOnItemLongClickListener { _, _, pos, _ ->
+            renameSpeaker(entries[pos].speaker)
+            true
+        }
+
+        val langAdapter = ArrayAdapter(
             this, android.R.layout.simple_spinner_item, languages.map { it.first }
         )
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        languageSpinner.adapter = adapter
+        langAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        languageSpinner.adapter = langAdapter
         languageSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
                 selectedLanguage = languages[pos].second
@@ -127,11 +195,9 @@ class MainActivity : AppCompatActivity() {
             if (running) stopTranscription() else requestAndStart()
         }
         saveButton.setOnClickListener { saveTranscript() }
-        render()
-    }
 
-    override fun onStart() {
-        super.onStart()
+        // Mottakeren registreres her (ikke i onStart) slik at teksten fortsetter
+        // å komme inn mens du er i Telefon-appen.
         val filter = IntentFilter().apply {
             addAction(TranscriptionService.ACTION_PARTIAL)
             addAction(TranscriptionService.ACTION_FINAL)
@@ -145,9 +211,34 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    override fun onStop() {
-        super.onStop()
+    override fun onDestroy() {
         try { unregisterReceiver(receiver) } catch (_: Exception) {}
+        super.onDestroy()
+    }
+
+    private fun showPartial(text: String) {
+        partialView.text = if (text.isBlank()) "" else "» $text"
+        partialView.visibility = if (text.isBlank()) View.GONE else View.VISIBLE
+    }
+
+    private fun renameSpeaker(index: Int) {
+        val input = EditText(this).apply {
+            setText(names[index])
+            setSelection(text.length)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Navn på taler")
+            .setView(input)
+            .setPositiveButton("OK") { _, _ ->
+                val n = input.text.toString().trim()
+                if (n.isNotEmpty()) {
+                    names[index] = n
+                    prefs.edit().putString("name$index", n).apply()
+                    adapter.notifyDataSetChanged()
+                }
+            }
+            .setNegativeButton("Avbryt", null)
+            .show()
     }
 
     private fun requestAndStart() {
@@ -174,25 +265,20 @@ class MainActivity : AppCompatActivity() {
         running = false
         startButton.text = "Start"
         statusView.text = "Stoppet"
-    }
-
-    private fun render() {
-        val sb = StringBuilder(lines)
-        if (partial.isNotBlank()) sb.append("» ").append(partial)
-        transcriptView.text = sb.toString()
-        scroll.post { scroll.fullScroll(ScrollView.FOCUS_DOWN) }
+        showPartial("")
     }
 
     private fun saveTranscript() {
-        if (lines.isBlank()) {
+        if (entries.isEmpty()) {
             Toast.makeText(this, "Ingenting å lagre ennå", Toast.LENGTH_SHORT).show()
             return
         }
+        val content = entries.joinToString("\n") { "[${it.time}] ${names[it.speaker]}: ${it.text}" }
         val name = "samtale_" +
             SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date()) + ".txt"
         val dir = getExternalFilesDir(null) ?: filesDir
         val file = File(dir, name)
-        file.writeText(lines.toString())
+        file.writeText(content + "\n")
         Toast.makeText(this, "Lagret: ${file.absolutePath}", Toast.LENGTH_LONG).show()
     }
 }

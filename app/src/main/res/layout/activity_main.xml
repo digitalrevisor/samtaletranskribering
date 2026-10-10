@@ -16,7 +16,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Tips: sett samtalen på høyttaler så fanges begge stemmer."
+        android:text="Høyttaler slås på automatisk. Trykk på en linje for å bytte taler. Hold inne for å gi taleren navn."
         android:textSize="13sp"
         android:paddingBottom="12dp" />
 
@@ -54,17 +54,18 @@
             android:text="Lagre" />
     </LinearLayout>
 
-    <ScrollView
-        android:id="@+id/scroll"
+    <ListView
+        android:id="@+id/transcriptList"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1">
+        android:layout_weight="1" />
 
-        <TextView
-            android:id="@+id/transcript"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="16sp"
-            android:textIsSelectable="true" />
-    </ScrollView>
+    <TextView
+        android:id="@+id/partial"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingTop="8dp"
+        android:textSize="15sp"
+        android:textStyle="italic"
+        android:visibility="gone" />
 </LinearLayout>

@@ -5,6 +5,23 @@ Live tale-til-tekst av telefonsamtaler med Googles gjenkjenning **på telefonen*
 Kjører som forgrunnstjeneste, så transkriberingen fortsetter mens du er inne i
 Telefon-appen. Resultatet vises løpende og kan lagres som `.txt`.
 
+## Last ned APK
+Nyeste ferdigbygde APK ligger alltid under **Releases** i dette repoet
+(`samtaletranskribering.apk`). Åpne siden på telefonen mens du er logget inn på GitHub.
+
+## Hvem snakker?
+Hver replikk merkes **Meg** eller **Anroper**. Appen skiller på lydstyrke: med
+høyttaler er din stemme nær mikrofonen (sterkere), mens anroperens stemme kommer
+svakere fra høyttaleren.
+
+- **Trykk** på en linje for å bytte taler. Appen lærer av rettelsen og merker
+  resten av samtalen på nytt (rettede linjer får ✓).
+- **Hold inne** en linje for å gi taleren et navn (f.eks. «Kari»). Navnet huskes.
+- Lagret fil får formatet `[12:01:22] Meg: tekst`.
+
+Begrensninger: de første replikkene merkes «Meg» til appen har hørt begge
+stemmene. Snakker begge uten pause, kan én linje inneholde begge stemmer.
+
 ## ⚠️ Viktig om «parallelle lydkilder»
 Du ba om at mikrofon **og** selve samtalekilden tas opp samtidig. Det er sperret
 av Android selv:
