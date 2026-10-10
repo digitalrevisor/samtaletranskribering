@@ -11,8 +11,8 @@ android {
         applicationId "com.example.samtaletranskribering"
         minSdk 24
         targetSdk 34
-        versionCode 3
-        versionName "1.2"
+        versionCode 4
+        versionName "1.3"
     }
 
     // Fast nøkkel, slik at nye bygg kan installeres over gamle uten å avinstallere.

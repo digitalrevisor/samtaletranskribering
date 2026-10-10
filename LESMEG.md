@@ -86,5 +86,11 @@ mange land kreves samtykke fra alle parter. **Informer motparten.** Dette er dit
 ansvar.
 
 ## Språk
+**Nynorsk:** Googles talegjenkjenning har ingen nynorsk-modell. Velger du
+«Norsk nynorsk (via bokmål)», gjenkjennes talen som bokmål og hver replikk
+oversettes automatisk til nynorsk med [Apertium](https://apertium.org) (gratis,
+åpen kildekode). Bare teksten sendes til apertium.org, ikke lyden. Uten nett blir
+teksten stående på bokmål.
+
 Standard er bokmål (`nb-NO`). Endre `"nb-NO"` i `MainActivity.kt` og
 `TranscriptionService.kt` for andre språk (f.eks. `"en-US"`).

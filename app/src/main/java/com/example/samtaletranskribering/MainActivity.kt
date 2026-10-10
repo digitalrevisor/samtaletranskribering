@@ -48,7 +48,7 @@ class MainActivity : AppCompatActivity() {
     // Visningsnavn → språkkode (BCP-47)
     private val languages = listOf(
         "Norsk bokmål" to "nb-NO",
-        "Norsk nynorsk" to "nn-NO",
+        "Norsk nynorsk (via bokmål)" to "nn-NO",
         "English (US)" to "en-US",
         "English (UK)" to "en-GB",
         "Svenska" to "sv-SE",
@@ -73,6 +73,32 @@ class MainActivity : AppCompatActivity() {
     )
     private var selectedLanguage = "nb-NO"
     private val prefs by lazy { getSharedPreferences("prefs", MODE_PRIVATE) }
+    private var translateErrorShown = false
+
+    /** Google har ingen nynorsk-modell: gjenkjenn som bokmål og oversett teksten etterpå. */
+    private fun recognitionLanguage(): String =
+        if (selectedLanguage == "nn-NO") "nb-NO" else selectedLanguage
+
+    /** Bytter ut bokmålsteksten i replikken med nynorsk når oversettelsen er klar. */
+    private fun toNynorsk(entry: Entry) {
+        NynorskTranslator.translate(entry.text) { nn ->
+            if (nn == null) {
+                if (!translateErrorShown) {
+                    translateErrorShown = true
+                    Toast.makeText(
+                        this, "Fikk ikke oversatt til nynorsk – teksten står på bokmål",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                return@translate
+            }
+            translateErrorShown = false
+            if (entries.none { it === entry }) return@translate // samtalen er tømt i mellomtiden
+            entry.text = nn
+            adapter.notifyDataSetChanged()
+            persist()
+        }
+    }
 
     // Talere: 0 = Meg, 1 = Anroper (navn kan endres ved å holde inne en linje)
     private val names = arrayOf("Meg", "Anroper")
@@ -108,7 +134,9 @@ class MainActivity : AppCompatActivity() {
                         val ts = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
                         val level = intent.getFloatExtra(TranscriptionService.EXTRA_LEVEL, 0f)
                         if (sessionName == null) sessionName = TranscriptStore.newSessionName()
-                        entries.add(Entry(ts, text.trim(), level))
+                        val entry = Entry(ts, text.trim(), level)
+                        entries.add(entry)
+                        if (selectedLanguage == "nn-NO") toNynorsk(entry)
                         SpeakerClassifier.relabel(entries)
                         adapter.notifyDataSetChanged()
                         listView.setSelection(entries.size - 1)
@@ -269,7 +297,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startTranscription() {
         val intent = Intent(this, TranscriptionService::class.java)
-            .putExtra(TranscriptionService.EXTRA_LANGUAGE, selectedLanguage)
+            .putExtra(TranscriptionService.EXTRA_LANGUAGE, recognitionLanguage())
         ContextCompat.startForegroundService(this, intent)
         running = true
         startButton.text = "Stopp"

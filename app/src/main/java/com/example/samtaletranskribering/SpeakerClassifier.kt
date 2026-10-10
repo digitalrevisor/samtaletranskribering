@@ -5,7 +5,7 @@ import kotlin.math.abs
 /** Én replikk i transkripsjonen. speaker: 0 = Meg, 1 = Anroper. */
 data class Entry(
     val time: String,
-    val text: String,
+    var text: String,
     val level: Float,
     var speaker: Int = 0,
     var manual: Boolean = false
