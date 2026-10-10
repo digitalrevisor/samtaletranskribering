@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.AudioDeviceInfo
@@ -14,20 +15,19 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.speech.RecognitionListener
+import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 
 /**
- * Forgrunnstjeneste som kjører kontinuerlig tale-til-tekst via Androids
- * SpeechRecognizer (Googles gjenkjenning på telefonen). Den fanger lyd fra
- * mikrofonen og sender løpende resultater videre til MainActivity via kringkasting.
+ * Forgrunnstjeneste som kjører kontinuerlig tale-til-tekst via Googles
+ * talegjenkjenning på telefonen (SpeechRecognizer). Resultater sendes til
+ * MainActivity via kringkasting.
  *
- * Merk om "parallelle kilder": Android lar ikke en vanlig app lese selve
- * samtalestrømmen (VOICE_CALL) på moderne, ikke-rootede telefoner. Den praktiske
- * løsningen er å sette samtalen på HØYTTALER – da plukker mikrofonen opp begge
- * stemmer, og alt blir transkribert her.
+ * Merk: Android lar ikke en vanlig app lese selve samtalestrømmen. Samtalen
+ * settes derfor på HØYTTALER, slik at mikrofonen fanger begge stemmer.
  */
 class TranscriptionService : Service() {
 
@@ -35,18 +35,33 @@ class TranscriptionService : Service() {
         const val ACTION_PARTIAL = "com.example.samtaletranskribering.PARTIAL"
         const val ACTION_FINAL = "com.example.samtaletranskribering.FINAL"
         const val ACTION_STATUS = "com.example.samtaletranskribering.STATUS"
+        const val ACTION_STOPPED = "com.example.samtaletranskribering.STOPPED"
         const val EXTRA_TEXT = "text"
         const val EXTRA_LANGUAGE = "language"
         const val EXTRA_LEVEL = "level"
         private const val CHANNEL_ID = "transcription"
         private const val NOTIF_ID = 42
+        private const val GOOGLE_APP = "com.google.android.googlequicksearchbox"
+        private const val MAX_FAILURES = 5
     }
+
+    /** En talegjenkjenningstjeneste appen kan prøve. */
+    private data class Engine(
+        val label: String,
+        val component: ComponentName?,
+        val onDevice: Boolean = false
+    )
+
+    private var engines: List<Engine> = emptyList()
+    private var engineIndex = 0
+    private var failures = 0
 
     private var recognizer: SpeechRecognizer? = null
     private var listening = false
     private var stopped = false
     private var language = "nb-NO"
     private var audioManager: AudioManager? = null
+    private val mutedStreams = mutableListOf<Int>()
     private val handler = Handler(Looper.getMainLooper())
 
     // Lydnivå for replikken som pågår – brukes til å skille talere.
@@ -63,10 +78,12 @@ class TranscriptionService : Service() {
         return top.average().toFloat()
     }
 
+    private fun engineLabel(): String = engines.getOrNull(engineIndex)?.label ?: "?"
+
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {
             allSamples.clear(); speechSamples.clear(); inSpeech = false
-            broadcast(ACTION_STATUS, "Lytter …")
+            broadcast(ACTION_STATUS, "Lytter … (${engineLabel()})")
         }
         override fun onBeginningOfSpeech() { inSpeech = true }
         override fun onRmsChanged(rmsdB: Float) {
@@ -79,13 +96,30 @@ class TranscriptionService : Service() {
         override fun onError(error: Int) {
             listening = false
             if (stopped) return
-            // Restart raskt – NO_MATCH/TIMEOUT er normalt i kontinuerlig lytting.
-            val delay = when (error) {
-                SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> 400L
-                SpeechRecognizer.ERROR_CLIENT -> 400L
-                else -> 100L
+            when (error) {
+                // Normalt ved stillhet – bare lytt videre.
+                SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
+                SpeechRecognizer.ERROR_NO_MATCH -> {
+                    failures = 0
+                    scheduleRestart(250L)
+                }
+                // Denne tjenesten kan ikke brukes – prøv neste.
+                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS, 12, 13 ->
+                    nextEngine(errorText(error))
+                else -> {
+                    failures++
+                    if (failures >= MAX_FAILURES) {
+                        nextEngine(errorText(error))
+                        return
+                    }
+                    broadcast(ACTION_STATUS, "${errorText(error)} – prøver igjen …")
+                    if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ||
+                        error == SpeechRecognizer.ERROR_CLIENT || error == 11) {
+                        createRecognizer()
+                    }
+                    scheduleRestart(minOf(8000L, 500L shl (failures - 1)))
+                }
             }
-            scheduleRestart(delay)
         }
 
         override fun onResults(results: Bundle?) {
@@ -93,6 +127,7 @@ class TranscriptionService : Service() {
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull().orEmpty()
             if (text.isNotBlank()) broadcast(ACTION_FINAL, text, utteranceLevel())
+            failures = 0
             listening = false
             if (!stopped) scheduleRestart(60L)
         }
@@ -101,7 +136,10 @@ class TranscriptionService : Service() {
             val text = partialResults
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull().orEmpty()
-            if (text.isNotBlank()) broadcast(ACTION_PARTIAL, text)
+            if (text.isNotBlank()) {
+                failures = 0
+                broadcast(ACTION_PARTIAL, text)
+            }
         }
 
         override fun onEvent(eventType: Int, params: Bundle?) {}
@@ -111,12 +149,102 @@ class TranscriptionService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         intent?.getStringExtra(EXTRA_LANGUAGE)?.let { language = it }
+        handler.removeCallbacksAndMessages(null)
         stopped = false
+        failures = 0
         startForegroundSafely()
         enableSpeaker()
-        setupRecognizer()
-        scheduleRestart(200L)
-        return START_STICKY
+        muteBeeps()
+
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            broadcast(ACTION_STATUS,
+                "Stoppet: Fant ingen talegjenkjenning. Installer/oppdater Google-appen fra Play Butikk.")
+            stopFully()
+            return START_NOT_STICKY
+        }
+
+        engines = findEngines()
+        engineIndex = 0
+        createRecognizer()
+        scheduleRestart(300L)
+        // Ikke START_STICKY: Android 14+ tillater ikke å starte mikrofontjenesten på nytt i bakgrunnen.
+        return START_NOT_STICKY
+    }
+
+    /** Googles tjeneste først, deretter telefonens standard, til slutt gjenkjenning på enheten. */
+    @Suppress("DEPRECATION")
+    private fun findEngines(): List<Engine> {
+        val list = mutableListOf<Engine>()
+        val services = try {
+            packageManager.queryIntentServices(Intent(RecognitionService.SERVICE_INTERFACE), 0)
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val google = services.filter { it.serviceInfo.packageName == GOOGLE_APP }
+        val otherGoogle = services.filter {
+            it.serviceInfo.packageName != GOOGLE_APP &&
+                it.serviceInfo.packageName.startsWith("com.google.")
+        }
+        for (s in google + otherGoogle) {
+            list.add(Engine("Google", ComponentName(s.serviceInfo.packageName, s.serviceInfo.name)))
+        }
+        list.add(Engine("telefonens standard", null))
+        if (Build.VERSION.SDK_INT >= 33) {
+            try {
+                if (SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
+                    list.add(Engine("på enheten", null, onDevice = true))
+                }
+            } catch (_: Exception) {}
+        }
+        return list
+    }
+
+    private fun createRecognizer() {
+        try { recognizer?.destroy() } catch (_: Exception) {}
+        recognizer = null
+        listening = false
+        val engine = engines.getOrNull(engineIndex) ?: return
+        recognizer = try {
+            when {
+                engine.onDevice && Build.VERSION.SDK_INT >= 33 ->
+                    SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+                engine.component != null ->
+                    SpeechRecognizer.createSpeechRecognizer(this, engine.component)
+                else -> SpeechRecognizer.createSpeechRecognizer(this)
+            }
+        } catch (_: Exception) {
+            null
+        }
+        recognizer?.setRecognitionListener(listener)
+    }
+
+    private fun nextEngine(reason: String) {
+        engineIndex++
+        failures = 0
+        if (engineIndex >= engines.size) {
+            broadcast(ACTION_STATUS,
+                "Stoppet: $reason. Sjekk internett, og at Google-appen er installert og oppdatert.")
+            stopFully()
+            return
+        }
+        broadcast(ACTION_STATUS, "$reason – prøver ${engineLabel()} …")
+        createRecognizer()
+        scheduleRestart(500L)
+    }
+
+    private fun errorText(e: Int): String = when (e) {
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Nettverket svarer ikke (1)"
+        SpeechRecognizer.ERROR_NETWORK -> "Ingen nettforbindelse (2)"
+        SpeechRecognizer.ERROR_AUDIO -> "Får ikke tilgang til mikrofonen (3)"
+        SpeechRecognizer.ERROR_SERVER -> "Feil hos talegjenkjenningen (4)"
+        SpeechRecognizer.ERROR_CLIENT -> "Klientfeil (5)"
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Talegjenkjenningen er opptatt (8)"
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Mangler mikrofontillatelse (9)"
+        10 -> "For mange forespørsler (10)"
+        11 -> "Mistet forbindelsen til tjenesten (11)"
+        12 -> "Språket støttes ikke av ${engineLabel()} (12)"
+        13 -> "Språket er ikke lastet ned for ${engineLabel()} (13)"
+        else -> "Feil $e"
     }
 
     /**
@@ -150,20 +278,39 @@ class TranscriptionService : Service() {
         } catch (_: Exception) {}
     }
 
-    private fun setupRecognizer() {
-        try { recognizer?.destroy() } catch (_: Exception) {}
-        recognizer = try {
-            if (Build.VERSION.SDK_INT >= 33 &&
-                SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
-                // Gjenkjenning helt på telefonen (ingen nett) når språkpakken finnes.
-                SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
-            } else {
-                SpeechRecognizer.createSpeechRecognizer(this)
-            }
-        } catch (e: Exception) {
-            SpeechRecognizer.createSpeechRecognizer(this)
+    /**
+     * Demper pipelyden talegjenkjenningen spiller ved hver omstart. Ringelyden
+     * røres ikke, så innkommende anrop høres fortsatt. Gjenopprettes ved stopp.
+     */
+    private fun muteBeeps() {
+        val am = audioManager ?: getSystemService(AudioManager::class.java) ?: return
+        audioManager = am
+        val ringWasMuted = try { am.isStreamMute(AudioManager.STREAM_RING) } catch (_: Exception) { false }
+        for (s in intArrayOf(
+            AudioManager.STREAM_MUSIC,
+            AudioManager.STREAM_SYSTEM,
+            AudioManager.STREAM_NOTIFICATION
+        )) {
+            try {
+                if (am.isStreamMute(s)) continue
+                am.adjustStreamVolume(s, AudioManager.ADJUST_MUTE, 0)
+                mutedStreams.add(s)
+                // Hvis varsler og ringelyd er koblet sammen, må ikke ringelyden dempes.
+                if (s == AudioManager.STREAM_NOTIFICATION && !ringWasMuted &&
+                    am.isStreamMute(AudioManager.STREAM_RING)) {
+                    am.adjustStreamVolume(s, AudioManager.ADJUST_UNMUTE, 0)
+                    mutedStreams.remove(s)
+                }
+            } catch (_: Exception) {}
         }
-        recognizer?.setRecognitionListener(listener)
+    }
+
+    private fun restoreSound() {
+        val am = audioManager ?: return
+        for (s in mutedStreams) {
+            try { am.adjustStreamVolume(s, AudioManager.ADJUST_UNMUTE, 0) } catch (_: Exception) {}
+        }
+        mutedStreams.clear()
     }
 
     private fun recognizerIntent(): Intent =
@@ -173,7 +320,6 @@ class TranscriptionService : Service() {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, language)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
         }
@@ -184,13 +330,27 @@ class TranscriptionService : Service() {
 
     private fun startListening() {
         if (stopped || listening) return
+        val r = recognizer
+        if (r == null) {
+            nextEngine("Kunne ikke starte ${engineLabel()}")
+            return
+        }
         listening = true
         try {
-            recognizer?.startListening(recognizerIntent())
+            r.startListening(recognizerIntent())
         } catch (e: Exception) {
             listening = false
-            if (!stopped) scheduleRestart(500L)
+            failures++
+            if (failures >= MAX_FAILURES) nextEngine("Kunne ikke starte ${engineLabel()}")
+            else scheduleRestart(1000L)
         }
+    }
+
+    private fun stopFully() {
+        stopped = true
+        handler.removeCallbacksAndMessages(null)
+        sendBroadcast(Intent(ACTION_STOPPED).setPackage(packageName))
+        stopSelf()
     }
 
     private fun startForegroundSafely() {
@@ -208,6 +368,7 @@ class TranscriptionService : Service() {
             .setContentText("Lytter og transkriberer samtale")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
+            .setSilent(true)
             .build()
         if (Build.VERSION.SDK_INT >= 29) {
             ServiceCompat.startForeground(
@@ -233,6 +394,7 @@ class TranscriptionService : Service() {
         stopped = true
         handler.removeCallbacksAndMessages(null)
         clearSpeaker()
+        restoreSound()
         try { recognizer?.stopListening() } catch (_: Exception) {}
         try { recognizer?.destroy() } catch (_: Exception) {}
         recognizer = null

@@ -109,6 +109,11 @@ class MainActivity : AppCompatActivity() {
                     showPartial("")
                 }
                 TranscriptionService.ACTION_STATUS -> statusView.text = text
+                TranscriptionService.ACTION_STOPPED -> {
+                    running = false
+                    startButton.text = "Start"
+                    showPartial("")
+                }
             }
         }
     }
@@ -202,6 +207,7 @@ class MainActivity : AppCompatActivity() {
             addAction(TranscriptionService.ACTION_PARTIAL)
             addAction(TranscriptionService.ACTION_FINAL)
             addAction(TranscriptionService.ACTION_STATUS)
+            addAction(TranscriptionService.ACTION_STOPPED)
         }
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
