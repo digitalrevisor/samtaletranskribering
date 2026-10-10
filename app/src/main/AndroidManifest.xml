@@ -13,6 +13,8 @@
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
+        <!-- Samsung Mine filer, for «Åpne Nedlastinger» -->
+        <package android:name="com.sec.android.app.myfiles" />
     </queries>
 
     <application
@@ -32,6 +34,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".SavedActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity" />
+
+        <activity
+            android:name=".ViewerActivity"
+            android:exported="false"
+            android:parentActivityName=".SavedActivity" />
 
         <service
             android:name=".TranscriptionService"

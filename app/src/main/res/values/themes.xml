@@ -1,3 +1,7 @@
 <resources>
-    <style name="Theme.App" parent="Theme.Material3.DayNight.NoActionBar" />
+    <!-- Med menylinje øverst (for «Lagrede» og «Åpne Nedlastinger») -->
+    <style name="Theme.App" parent="Theme.Material3.DayNight">
+        <item name="windowActionBar">true</item>
+        <item name="windowNoTitle">false</item>
+    </style>
 </resources>

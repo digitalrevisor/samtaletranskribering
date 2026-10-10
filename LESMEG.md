@@ -9,6 +9,15 @@ Telefon-appen. Resultatet vises løpende og kan lagres som `.txt`.
 Nyeste ferdigbygde APK ligger alltid under **Releases** i dette repoet
 (`samtaletranskribering.apk`). Åpne siden på telefonen mens du er logget inn på GitHub.
 
+## Lagrede samtaler
+Samtalen lagres automatisk for hver ny replikk – du trenger ikke trykke Lagre.
+- **Lagrede** (øverst til høyre): liste over alle samtaler. Trykk for å åpne,
+  hold inne for å slette. I en åpnet samtale kan du **Dele** (e-post, SMS, Drive …)
+  eller **Slette**.
+- **⋮ → Åpne Nedlastinger**: en kopi av hver samtale ligger i
+  `Nedlastinger/Samtaletranskribering` (Samsung: *Mine filer → Nedlastinger*).
+- **Ny samtale** tømmer skjermen og starter en ny fil.
+
 ## Hvem snakker?
 Hver replikk merkes **Meg** eller **Anroper**. Appen skiller på lydstyrke: med
 høyttaler er din stemme nær mikrofonen (sterkere), mens anroperens stemme kommer
@@ -17,7 +26,7 @@ svakere fra høyttaleren.
 - **Trykk** på en linje for å bytte taler. Appen lærer av rettelsen og merker
   resten av samtalen på nytt (rettede linjer får ✓).
 - **Hold inne** en linje for å gi taleren et navn (f.eks. «Kari»). Navnet huskes.
-- Lagret fil får formatet `[12:01:22] Meg: tekst`.
+- Filene har formatet `[12:01:22] Meg: tekst`.
 
 Begrensninger: de første replikkene merkes «Meg» til appen har hørt begge
 stemmene. Snakker begge uten pause, kan én linje inneholde begge stemmer.

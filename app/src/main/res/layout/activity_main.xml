@@ -16,7 +16,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Høyttaler slås på automatisk. Trykk på en linje for å bytte taler. Hold inne for å gi taleren navn."
+        android:text="Høyttaler slås på automatisk. Trykk på en linje for å bytte taler. Hold inne for å gi taleren navn. Samtalen lagres automatisk – se «Lagrede» øverst."
         android:textSize="13sp"
         android:paddingBottom="12dp" />
 
@@ -46,12 +46,12 @@
             android:text="Start" />
 
         <Button
-            android:id="@+id/saveButton"
+            android:id="@+id/newButton"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:layout_marginStart="8dp"
-            android:text="Lagre" />
+            android:text="Ny samtale" />
     </LinearLayout>
 
     <ListView

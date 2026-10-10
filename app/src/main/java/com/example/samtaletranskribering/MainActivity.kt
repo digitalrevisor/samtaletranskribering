@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.text.SpannableStringBuilder
@@ -15,6 +16,8 @@ import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AdapterView
@@ -29,7 +32,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -40,7 +42,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var partialView: TextView
     private lateinit var listView: ListView
     private lateinit var startButton: Button
-    private lateinit var saveButton: Button
+    private lateinit var newButton: Button
     private lateinit var languageSpinner: Spinner
 
     // Visningsnavn → språkkode (BCP-47)
@@ -83,6 +85,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var adapter: TranscriptAdapter
     private var running = false
 
+    // Gjeldende samtale – lagres automatisk for hver ny replikk
+    private var sessionName: String? = null
+    private var sessionDownloadUri: Uri? = null
+
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             val micGranted = ContextCompat.checkSelfPermission(
@@ -101,10 +107,12 @@ class MainActivity : AppCompatActivity() {
                     if (text.isNotBlank()) {
                         val ts = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
                         val level = intent.getFloatExtra(TranscriptionService.EXTRA_LEVEL, 0f)
+                        if (sessionName == null) sessionName = TranscriptStore.newSessionName()
                         entries.add(Entry(ts, text.trim(), level))
                         SpeakerClassifier.relabel(entries)
                         adapter.notifyDataSetChanged()
                         listView.setSelection(entries.size - 1)
+                        persist()
                     }
                     showPartial("")
                 }
@@ -155,7 +163,7 @@ class MainActivity : AppCompatActivity() {
         partialView = findViewById(R.id.partial)
         listView = findViewById(R.id.transcriptList)
         startButton = findViewById(R.id.startButton)
-        saveButton = findViewById(R.id.saveButton)
+        newButton = findViewById(R.id.newButton)
         languageSpinner = findViewById(R.id.languageSpinner)
 
         names[0] = prefs.getString("name0", names[0]) ?: names[0]
@@ -170,6 +178,7 @@ class MainActivity : AppCompatActivity() {
             e.manual = true
             SpeakerClassifier.relabel(entries)
             adapter.notifyDataSetChanged()
+            persist()
         }
         // Hold inne: gi taleren et navn
         listView.setOnItemLongClickListener { _, _, pos, _ ->
@@ -199,7 +208,7 @@ class MainActivity : AppCompatActivity() {
         startButton.setOnClickListener {
             if (running) stopTranscription() else requestAndStart()
         }
-        saveButton.setOnClickListener { saveTranscript() }
+        newButton.setOnClickListener { confirmNewSession() }
 
         // Mottakeren registreres her (ikke i onStart) slik at teksten fortsetter
         // å komme inn mens du er i Telefon-appen.
@@ -241,6 +250,7 @@ class MainActivity : AppCompatActivity() {
                     names[index] = n
                     prefs.edit().putString("name$index", n).apply()
                     adapter.notifyDataSetChanged()
+                    persist()
                 }
             }
             .setNegativeButton("Avbryt", null)
@@ -274,17 +284,59 @@ class MainActivity : AppCompatActivity() {
         showPartial("")
     }
 
-    private fun saveTranscript() {
-        if (entries.isEmpty()) {
-            Toast.makeText(this, "Ingenting å lagre ennå", Toast.LENGTH_SHORT).show()
-            return
+    /** Lagrer gjeldende samtale i appen og som kopi i Nedlastinger. */
+    private fun persist() {
+        val name = sessionName ?: return
+        if (entries.isEmpty()) return
+        val content = TranscriptStore.format(entries, names)
+        try {
+            TranscriptStore.saveInternal(this, name, content)
+        } catch (_: Exception) {
+            statusView.text = "Kunne ikke lagre samtalen"
         }
-        val content = entries.joinToString("\n") { "[${it.time}] ${names[it.speaker]}: ${it.text}" }
-        val name = "samtale_" +
-            SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date()) + ".txt"
-        val dir = getExternalFilesDir(null) ?: filesDir
-        val file = File(dir, name)
-        file.writeText(content + "\n")
-        Toast.makeText(this, "Lagret: ${file.absolutePath}", Toast.LENGTH_LONG).show()
+        sessionDownloadUri = TranscriptStore.saveToDownloads(this, name, content, sessionDownloadUri)
+    }
+
+    private fun confirmNewSession() {
+        if (entries.isEmpty()) return
+        AlertDialog.Builder(this)
+            .setTitle("Starte ny samtale?")
+            .setMessage("Den nåværende samtalen er lagret og finnes under «Lagrede».")
+            .setPositiveButton("Ny samtale") { _, _ ->
+                entries.clear()
+                sessionName = null
+                sessionDownloadUri = null
+                adapter.notifyDataSetChanged()
+                showPartial("")
+            }
+            .setNegativeButton("Avbryt", null)
+            .show()
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menu.add(0, MENU_SAVED, 0, "Lagrede")
+            .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS or MenuItem.SHOW_AS_ACTION_WITH_TEXT)
+        menu.add(0, MENU_DOWNLOADS, 1, "Åpne Nedlastinger")
+            .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        when (item.itemId) {
+            MENU_SAVED -> {
+                startActivity(Intent(this, SavedActivity::class.java))
+                return true
+            }
+            MENU_DOWNLOADS -> {
+                TranscriptStore.openDownloads(this)
+                return true
+            }
+        }
+        return super.onOptionsItemSelected(item)
+    }
+
+    companion object {
+        private const val MENU_SAVED = 1
+        private const val MENU_DOWNLOADS = 2
     }
 }
